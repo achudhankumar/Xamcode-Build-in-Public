@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
-import { fetchBipSummary } from '@/lib/bip/client';
+import { fetchBipSummary, resolveBaseUrl } from '@/lib/bip/client';
 import { classifyHonesty } from '@/lib/bip/types';
 import { DEMO_MILESTONES, computeProgressSummary } from '@/lib/db/progress';
-import { isSupabaseConfigured } from '@/lib/supabase/constants';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 60;
@@ -11,7 +10,7 @@ function demoFallback(reason: string) {
   const summary = computeProgressSummary(DEMO_MILESTONES);
   return NextResponse.json(
     {
-      source: isSupabaseConfigured ? 'supabase' : 'demo',
+      source: 'demo' as const,
       honesty: 'demo' as const,
       reachable: false,
       liveActivity: false,
@@ -61,9 +60,55 @@ function demoFallback(reason: string) {
   );
 }
 
+// Upstream failure (e.g. HTTP 503, timeout, validation): never present seeded
+// demo numbers as live data. Emit an honest unavailable payload instead.
+function unavailableFallback(reason: string) {
+  return NextResponse.json(
+    {
+      source: 'unavailable' as const,
+      honesty: 'main_unavailable' as const,
+      reachable: false,
+      liveActivity: false,
+      error: reason,
+      progress: {
+        percent: 0,
+        verifiedWeight: 0,
+        totalWeight: 0,
+        phase: 'Unavailable',
+        counts: { verified: 0, inProgress: 0, needsReview: 0, planned: 0, total: 0 },
+      },
+      milestones: [],
+      launch: {
+        readinessPercent: 0,
+        readiness: 'Unavailable',
+        estimated: null,
+        confirmed: null,
+        note: '',
+        countdownMs: null,
+        estimatedCountdownMs: null,
+        hasConfirmedDate: false,
+      },
+      status: {
+        build: { state: 'unknown', at: null, ref: null },
+        tests: { state: 'unknown', at: null, ref: null },
+        deploy: { state: 'unknown', at: null, ref: null },
+      },
+      integration: { webhooks: false, ciIngest: false, live: false },
+      roadmap: [],
+      recentActivity: [],
+    },
+    { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+  );
+}
+
 export async function GET() {
+  // Missing/invalid BIP_BASE_URL is a configuration state (demo), while a
+  // failed upstream fetch must classify as 'unavailable' so the UI never
+  // shows seeded demo progress as if it were live production data.
+  const cfg = resolveBaseUrl();
+  if (!cfg.ok) return demoFallback(cfg.reason);
   const r = await fetchBipSummary();
-  if (!r.ok) return demoFallback(r.error);
+  if (!r.ok) return unavailableFallback(r.error);
   const s = r.summary;
   const honesty = classifyHonesty({
     reachable: true,

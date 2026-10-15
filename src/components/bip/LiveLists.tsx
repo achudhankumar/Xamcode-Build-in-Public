@@ -66,7 +66,21 @@ export function ReadinessBadgeInner() {
     fetch('/api/live/summary').then((r) => r.json()).then((j) => { if (!c) setData(j); }).catch(() => {});
     return () => { c = true; };
   }, []);
-  if (!data || data.source === 'unavailable') return null;
+  if (!data) return null;
+  if (data.source === 'unavailable') {
+    return (
+      <div style={{ marginTop: '1.5rem', display: 'inline-block', padding: '0.375rem 0.75rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '9999px', fontSize: '0.8125rem', color: '#ef4444' }}>
+        Main API unavailable · live numbers paused
+      </div>
+    );
+  }
+  if (data.source !== 'main') {
+    return (
+      <div style={{ marginTop: '1.5rem', display: 'inline-block', padding: '0.375rem 0.75rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '9999px', fontSize: '0.8125rem', color: '#f59e0b' }}>
+        Demo data · live API not configured
+      </div>
+    );
+  }
   return (
     <div style={{ marginTop: '1.5rem', display: 'inline-block', padding: '0.375rem 0.75rem', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '9999px', fontSize: '0.8125rem', color: '#22c55e' }}>
       {data.progress.percent}% verified · {data.launch.readiness}{data.liveActivity ? ' · live' : ' · awaiting live events'}

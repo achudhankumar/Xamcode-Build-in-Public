@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { SourceEvents } from '@/components/bip/LiveLists';
 
 interface ChangelogEntry {
   version: string;
@@ -18,6 +17,22 @@ interface ChangelogResponse {
   entries: ChangelogEntry[];
   demo_mode: boolean;
   error?: string;
+}
+
+interface LiveActivityEvent {
+  id: string;
+  type: string;
+  summary: string;
+  detail: string;
+  ref: string;
+  status: string;
+  source: string;
+  at: string;
+}
+
+interface LiveSummaryResponse {
+  source: string;
+  recentActivity?: LiveActivityEvent[];
 }
 
 function formatDate(iso: string | null): string {
@@ -50,24 +65,32 @@ export default function ChangelogPageClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
+  const [summary, setSummary] = useState<LiveSummaryResponse | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/changelog');
-      if (!res.ok) throw new Error('Request failed');
-      const json: ChangelogResponse = await res.json();
-      if (json.error) throw new Error(json.error);
-      setEntries(json.entries ?? []);
-      setDemoMode(json.demo_mode);
+      const [cRes, sRes] = await Promise.all([fetch('/api/changelog'), fetch('/api/live/summary')]);
+      if (!cRes.ok && !sRes.ok) throw new Error('Request failed');
+      const cJson: ChangelogResponse | null = cRes.ok ? ((await cRes.json()) as ChangelogResponse) : null;
+      const rawSummary: LiveSummaryResponse | null = sRes.ok ? ((await sRes.json()) as LiveSummaryResponse) : null;
+      const liveSummary = rawSummary && typeof rawSummary.source === 'string' ? rawSummary : null;
+      if (!liveSummary && cJson?.error) throw new Error(cJson.error);
+      // Never render seeded sample entries as if they were published releases.
+      setEntries(cJson && !cJson.error && !cJson.demo_mode ? (cJson.entries ?? []) : []);
+      setDemoMode(cJson?.demo_mode === true);
+      setSummary(liveSummary);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load changelog entries.');
       setEntries([]);
+      setSummary(null);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const activity = summary?.source === 'main' ? (summary.recentActivity ?? []) : [];
 
   useEffect(() => {
     load();
@@ -82,9 +105,14 @@ export default function ChangelogPageClient() {
         <p style={{ fontSize: '1.125rem', color: '#a1a1aa', margin: 0, lineHeight: 1.6 }}>
           Every release and major update is documented.
         </p>
-        {demoMode && (
+        {demoMode && entries.length === 0 && (
           <p style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#f59e0b', display: 'inline-block', padding: '0.25rem 0.75rem', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '9999px', background: 'rgba(245, 158, 11, 0.1)' }}>
-            Sample content — Supabase not configured
+            Sample releases hidden — Supabase not configured
+          </p>
+        )}
+        {summary?.source === 'unavailable' && (
+          <p style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#ef4444', display: 'inline-block', padding: '0.25rem 0.75rem', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '9999px', background: 'rgba(239, 68, 68, 0.1)' }}>
+            Main API unavailable — live activity paused
           </p>
         )}
       </header>
@@ -105,7 +133,7 @@ export default function ChangelogPageClient() {
         </div>
       )}
 
-      {!loading && !error && entries.length === 0 && (
+      {!loading && !error && entries.length === 0 && activity.length === 0 && (
         <div style={{ padding: '3rem', textAlign: 'center', color: '#a1a1aa', background: '#111113', border: '1px solid #27272a', borderRadius: '0.75rem' }}>
           No changelog entries yet.
         </div>
@@ -131,7 +159,21 @@ export default function ChangelogPageClient() {
           ))}
         </div>
       )}
-      <SourceEvents />
+
+      {!loading && !error && activity.length > 0 && (
+        <div style={{ padding: '1.5rem', background: '#111113', border: '1px solid #27272a', borderRadius: '0.75rem', marginTop: '1.25rem' }}>
+          <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#fafafa', margin: '0 0 0.25rem' }}>Live development activity</h2>
+          <p style={{ fontSize: '0.8125rem', color: '#a1a1aa', margin: '0 0 1rem' }}>Verified events from the main Xamcode app. Never auto-inserted into release notes.</p>
+          <div style={{ display: 'grid', gap: '0.5rem' }}>
+            {activity.map((e) => (
+              <div key={e.id} style={{ padding: '0.75rem', background: '#18181b', borderRadius: '0.5rem' }}>
+                <p style={{ fontSize: '0.875rem', color: '#fafafa', margin: '0 0 0.25rem' }}>{e.summary}</p>
+                <p style={{ fontSize: '0.75rem', color: '#71717a', margin: 0 }}>{e.type}{e.at ? ' · ' + new Date(e.at).toLocaleString() : ''}{e.ref ? ' · ' + String(e.ref).slice(0, 7) : ''}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

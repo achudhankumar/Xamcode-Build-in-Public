@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { OfficialRoadmap } from '@/components/bip/LiveLists';
 
 interface RoadmapItem {
   id: string;
@@ -23,6 +22,31 @@ interface ApiResponse {
   demo_mode: boolean;
   error?: string;
 }
+
+interface LiveRoadmapItem {
+  id: string;
+  title: string;
+  summary?: string;
+  description?: string;
+  status: string;
+  updatedAt?: string;
+}
+
+interface LiveSummaryResponse {
+  source: string;
+  roadmap?: LiveRoadmapItem[];
+}
+
+type DisplayRoadmapItem = {
+  id: string;
+  title: string;
+  description?: string | null;
+  summary?: string;
+  status: string;
+  category?: string;
+  priority?: string;
+  target_quarter?: string | null;
+};
 
 const STATUS_FILTERS = [
   { value: 'all', label: 'All' },
@@ -58,36 +82,53 @@ const PRIORITY_LABELS: Record<string, string> = {
 
 export default function RoadmapPageClient() {
   const [items, setItems] = useState<RoadmapItem[]>([]);
+  const [liveItems, setLiveItems] = useState<LiveRoadmapItem[]>([]);
+  const [liveSource, setLiveSource] = useState<string | null>(null);
   const [status, setStatus] = useState('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
 
-  const loadItems = useCallback(async () => {
+  // Main API roadmap is the source of truth. Supabase items are only a
+  // fallback when the main API returned no roadmap, and never demo seeds.
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (status && status !== 'all') params.set('status', status);
-      if (search.trim()) params.set('search', search.trim());
-      const res = await fetch('/api/roadmap?' + params.toString());
-      if (!res.ok) throw new Error('Request failed');
-      const data: ApiResponse = await res.json();
-      if (data.error) throw new Error(data.error);
-      setItems(data.items ?? []);
-      setDemoMode(data.demo_mode);
+      const [sRes, rRes] = await Promise.all([fetch('/api/live/summary'), fetch('/api/roadmap?page_size=100')]);
+      if (!sRes.ok && !rRes.ok) throw new Error('Request failed');
+      const sJson: LiveSummaryResponse | null = sRes.ok ? ((await sRes.json()) as LiveSummaryResponse) : null;
+      const rJson: ApiResponse | null = rRes.ok ? ((await rRes.json()) as ApiResponse) : null;
+      if (rJson?.error && !sJson) throw new Error(rJson.error);
+      const source = sJson && typeof sJson.source === 'string' ? sJson.source : null;
+      const roadmap = sJson && Array.isArray(sJson.roadmap) ? sJson.roadmap : [];
+      setLiveSource(source);
+      setLiveItems(source === 'main' ? roadmap : []);
+      // Never render seeded sample items as real roadmap content.
+      setItems(rJson && !rJson.error && !rJson.demo_mode ? (rJson.items ?? []) : []);
+      setDemoMode(rJson?.demo_mode === true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load roadmap items.');
       setItems([]);
+      setLiveItems([]);
     } finally {
       setLoading(false);
     }
-  }, [status, search]);
+  }, []);
 
   useEffect(() => {
-    loadItems();
-  }, [loadItems]);
+    load();
+  }, [load]);
+
+  const usingLive = liveItems.length > 0;
+  const displayItems: DisplayRoadmapItem[] = usingLive ? liveItems : items;
+  const query = search.trim().toLowerCase();
+  const filtered = displayItems.filter((item) => {
+    const statusOk = !status || status === 'all' || item.status === status;
+    const haystack = (item.title + ' ' + (item.description ?? '') + ' ' + (item.summary ?? '')).toLowerCase();
+    return statusOk && (!query || haystack.includes(query));
+  });
 
   return (
     <div style={{ padding: '3rem 1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
@@ -98,9 +139,14 @@ export default function RoadmapPageClient() {
         <p style={{ fontSize: '1.125rem', color: '#a1a1aa', margin: 0, maxWidth: '600px', lineHeight: 1.6 }}>
           What we are building next, and what is already done.
         </p>
-        {demoMode && (
+        {demoMode && !usingLive && (
           <p style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#f59e0b', display: 'inline-block', padding: '0.25rem 0.75rem', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '9999px', background: 'rgba(245, 158, 11, 0.1)' }}>
-            Sample content — Supabase not configured
+            Sample roadmap hidden — Supabase not configured
+          </p>
+        )}
+        {liveSource === 'unavailable' && (
+          <p style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: '#ef4444', display: 'inline-block', padding: '0.25rem 0.75rem', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '9999px', background: 'rgba(239, 68, 68, 0.1)' }}>
+            Main API unavailable
           </p>
         )}
       </header>
@@ -130,7 +176,13 @@ export default function RoadmapPageClient() {
           })}
         </div>
       </div>
-      <OfficialRoadmap />
+
+      {usingLive && !loading && !error && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#fafafa', margin: '0 0 0.25rem' }}>Official Xamcode milestones</h2>
+          <p style={{ fontSize: '0.8125rem', color: '#a1a1aa', margin: 0 }}>Source of truth: main Xamcode app.</p>
+        </div>
+      )}
 
       {loading && (
         <div style={{ padding: '3rem', textAlign: 'center', color: '#a1a1aa', background: '#111113', border: '1px solid #27272a', borderRadius: '0.75rem' }}>
@@ -142,21 +194,21 @@ export default function RoadmapPageClient() {
         <div style={{ padding: '1.5rem', textAlign: 'center', color: '#ef4444', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '0.75rem' }}>
           <p style={{ margin: '0 0 1rem', fontWeight: 600 }}>Could not load the roadmap.</p>
           <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#a1a1aa' }}>{error}</p>
-          <button type="button" onClick={loadItems} style={{ padding: '0.5rem 1rem', background: 'transparent', color: '#fafafa', border: '1px solid #27272a', borderRadius: '0.5rem', cursor: 'pointer' }}>
+          <button type="button" onClick={load} style={{ padding: '0.5rem 1rem', background: 'transparent', color: '#fafafa', border: '1px solid #27272a', borderRadius: '0.5rem', cursor: 'pointer' }}>
             Retry
           </button>
         </div>
       )}
 
-      {!loading && !error && items.length === 0 && (
+      {!loading && !error && filtered.length === 0 && (
         <div style={{ padding: '3rem', textAlign: 'center', color: '#a1a1aa', background: '#111113', border: '1px solid #27272a', borderRadius: '0.75rem' }}>
-          No roadmap items match your filters.
+          {displayItems.length === 0 ? 'No roadmap items published yet.' : 'No roadmap items match your filters.'}
         </div>
       )}
 
-      {!loading && !error && items.length > 0 && (
+      {!loading && !error && filtered.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.25rem' }}>
-          {items.map((item) => (
+          {filtered.map((item) => (
             <div key={item.id} style={{ padding: '1.5rem', background: '#111113', border: '1px solid #27272a', borderRadius: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                 <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#fafafa', margin: 0 }}>{item.title}</h2>
@@ -164,10 +216,16 @@ export default function RoadmapPageClient() {
                   {STATUS_LABELS[item.status] ?? item.status}
                 </span>
               </div>
-              <p style={{ fontSize: '0.9375rem', color: '#a1a1aa', margin: 0, lineHeight: 1.6 }}>{item.description}</p>
+              {(item.description || item.summary) && (
+                <p style={{ fontSize: '0.9375rem', color: '#a1a1aa', margin: 0, lineHeight: 1.6 }}>{item.description || item.summary}</p>
+              )}
               <div style={{ marginTop: 'auto', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.75rem', color: '#71717a' }}>
-                <span style={{ padding: '0.125rem 0.5rem', background: '#18181b', border: '1px solid #27272a', borderRadius: '0.375rem' }}>{item.category}</span>
-                <span style={{ padding: '0.125rem 0.5rem', background: '#18181b', border: '1px solid #27272a', borderRadius: '0.375rem' }}>{PRIORITY_LABELS[item.priority] ?? item.priority} priority</span>
+                {item.category && (
+                  <span style={{ padding: '0.125rem 0.5rem', background: '#18181b', border: '1px solid #27272a', borderRadius: '0.375rem' }}>{item.category}</span>
+                )}
+                {item.priority && (
+                  <span style={{ padding: '0.125rem 0.5rem', background: '#18181b', border: '1px solid #27272a', borderRadius: '0.375rem' }}>{PRIORITY_LABELS[item.priority] ?? item.priority} priority</span>
+                )}
                 {item.target_quarter && (
                   <span style={{ padding: '0.125rem 0.5rem', background: '#18181b', border: '1px solid #27272a', borderRadius: '0.375rem' }}>{item.target_quarter}</span>
                 )}
